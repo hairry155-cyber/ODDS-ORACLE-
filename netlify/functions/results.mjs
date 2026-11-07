@@ -76,6 +76,8 @@ function extractRows(html) {
   }
   return out;
 }
+// HTTP headers must be plain ASCII: percent-encode any accented letters in the address before sending it as the referer.
+const asciiUrl = (u) => { try { return encodeURI(decodeURI(u)); } catch { return encodeURI(u); } };
 const clean = (s) => String(s == null ? "" : s).replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 export default async (req) => {
   const u = new URL(req.url);
@@ -83,7 +85,8 @@ export default async (req) => {
   let matchUrl = (u.searchParams.get("url") || "").trim();
   const diag = { dayPages: [] };
   try {
-    if (!/^https:\/\/www\.mutating\.com\/football-stats\/match-preview-[a-z0-9-]+\/?$/i.test(matchUrl)) matchUrl = "";
+    // Saved addresses can hold accented letters (Rzeszów, Žižkov, Kecskeméti), so accept any characters except spaces/quotes/brackets, still only on mutating.com.
+    if (!/^https:\/\/www\.mutating\.com\/football-stats\/match-preview-[^\s"'<>]+$/i.test(matchUrl)) matchUrl = "";
     if (!matchUrl) {
       if (!home || !away) return json({ ok: false, reason: "missing_names" }, 400);
       const days = ["/football-stats/yesterday/", "/football-stats/", "/football-stats/tomorrow/"];
@@ -106,7 +109,7 @@ export default async (req) => {
     if (!code) return json({ ok: false, reason: "no_code", diag });
     const r = await fetchT(BASE + "/updategame-" + code + "/", {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8", "x-requested-with": "XMLHttpRequest", accept: "*/*", referer: matchUrl, origin: BASE, "user-agent": UA },
+      headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8", "x-requested-with": "XMLHttpRequest", accept: "*/*", referer: asciiUrl(matchUrl), origin: BASE, "user-agent": UA },
       body: "",
     });
     const raw = await r.text();
