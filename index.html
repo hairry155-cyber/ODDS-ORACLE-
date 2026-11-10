@@ -143,7 +143,8 @@ textarea:focus{outline:none;border-color:var(--silver3);}
 </div>
 <div id="analyseTab" class="zone">
 <div id="slipWrap" style="margin-bottom:12px">
-    <button class="run-btn" type="button" onclick="buildSlips()" style="background:linear-gradient(135deg,#0d9488,#7c3aed);margin-bottom:8px">&#x1F3AF; Build today&#39;s slips (Safest, Over 1.5, Full Time, Over 2.5 &middot; 2.20&ndash;2.50)</button>
+    <div style="display:flex;gap:8px;margin-bottom:6px"><button class="btn-sm" id="dayToday" type="button" onclick="setSlipDay('today')">Today</button><button class="btn-sm" id="dayTomorrow" type="button" onclick="setSlipDay('tomorrow')">Tomorrow</button></div><div id="slipDayNote" style="font-size:11.5px;color:var(--dim);margin-bottom:8px"></div>
+    <button class="run-btn" type="button" onclick="buildSlips()" style="background:linear-gradient(135deg,#0d9488,#7c3aed);margin-bottom:8px">&#x1F3AF; Build slips (Safest, Over 1.5, Full Time, Over 2.5, Daily &middot; 2.20&ndash;2.50)</button>
     <div id="slipOut"></div>
   </div>
   <div id="inputSection">
@@ -317,17 +318,20 @@ function renderScoreboard(){
     h+="<div style='font-size:11px;color:#b45309'>* fewer than 30 results in that band</div></div>";
   }
   // forward test: only matches analysed under the frozen rules (stamped "v1"); nothing here can be fitted to the past
-  const FT={all:mk(),A:mk(),B:mk(),C:mk(),D:mk(),any:mk()};let ftN=0;
+  const FT={all:mk(),A:mk(),B:mk(),C:mk(),D:mk(),E:mk(),F:mk(),any:mk(),bb25:mk(),al12:mk()};let ftN=0;
   for(const e of loadLog()){if(e.ver!==RULES_VER||e.noPick)continue;ftN++;for(const p of (e.picks||[])){
     if(!["win","loss","void"].includes(p.result))continue;
-    add(FT.all,p);if(p.money){add(FT[p.money],p);add(FT.any,p);}
+    add(FT.all,p);if(p.money){for(const ch of String(p.money))if(FT[ch])add(FT[ch],p);add(FT.any,p);}
+    const __t=String(p.pick||"").trim();
+    if(/^over 2\.5$/i.test(__t)&&__pscore(p)>=9&&(__edgeNum(p)||-99)>=15)add(FT.bb25,p);
+    if(/^(home|away) win \(1x2\)/i.test(__t)&&e.aligned)add(FT.al12,p);
   }}
-  const MN={A:"A · 1X2 10/10, edge ≥ +10",B:"B · Over 2.5, xG ≥ 3.5, High",C:"C · DNB Home, xG 3–3.5, 10/10",D:"D · Over 1.5 ≤ 1.15, 10/10, xG ≥ 3.5"};
+  const MN={A:"A · 1X2 10/10, edge ≥ +10",B:"B · Over 2.5, xG ≥ 3.5, High",C:"C · DNB Home, xG 3–3.5, 10/10",D:"D · Over 1.5 ≤ 1.15, 10/10, xG ≥ 3.5",E:"E · 1X2 Home 1.3–1.5, High",F:"F · 1X2 Away, 10/10",bb25:"Best Bet on Over 2.5",al12:"Aligned on 1X2"};
   let ft="";
   if(scoreOpen){
     ft="<div style='padding:0 14px 12px'><div style='border-top:2px solid var(--bd);padding-top:8px;font-size:13px'><b>Forward test</b> <span style='font-size:11.5px;color:var(--dim)'>(rules frozen until about 15 Dec · "+ftN+" matches so far)</span></div>";
     const row=(label,o)=>{const f=fmt(o);return"<div style='display:flex;justify-content:space-between;font-size:12px;padding:3px 0'><span>"+label+"</span><span>"+(f.hit==null?"no results yet":f.hit+"% of "+f.gr+" &nbsp;<b style='color:"+col(f.roi)+"'>"+(f.roi>0?"+":"")+f.roi+"%</b>")+(f.gr<30?" <span style='color:#b45309'>*</span>":"")+"</span></div>";};
-    ft+=row("All money picks",FT.any);for(const k of ["A","B","C","D"])ft+=row(MN[k],FT[k]);ft+=row("Every pick (all markets)",FT.all);
+    ft+=row("All money picks",FT.any);for(const k of ["A","B","C","D","E","F","bb25","al12"])ft+=row(MN[k],FT[k]);ft+=row("Every pick (all markets)",FT.all);
     ft+="<div style='font-size:11px;color:#b45309;margin-top:4px'>* fewer than 30 results. Do not judge a pocket before about 300.</div></div>";
   }
   const tot=mk();for(const k of names)for(const f of ["n","w","v","pl","os"])tot[f]+=G[k].all[f];const tf=fmt(tot);
@@ -345,6 +349,26 @@ function renderTrash(){
 }
 // ── SHARED RULES: Goals Lock and Best Bet are worked out here and nowhere else, so Analyse, Log, CSV and slips always agree ──
 const __today=()=>new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
+// Slips are built for the day the matches KICK OFF (saved from betPawa); entries with no kickoff use the day they were analysed.
+let __slipDayMode=null;
+const __entryDay=e=>e.kickoffDate||e.date;
+function __slipTarget(){
+  const now=new Date(),today=__today(),tm=new Date(now.getTime()+864e5).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
+  let mode=__slipDayMode;
+  if(!mode){const hasTm=loadLog().some(e=>!e.noPick&&e.picks&&e.picks.length&&e.kickoffDate===tm&&(!e.kickoffTs||e.kickoffTs>now.getTime()));mode=(now.getHours()>=17&&hasTm)?"tomorrow":"today";}
+  return{mode,day:mode==="tomorrow"?tm:today,today,tm};
+}
+function __slipReady(day){const now=Date.now();return loadLog().filter(e=>!e.noPick&&e.picks&&e.picks.length&&__entryDay(e)===day&&!(e.kickoffTs&&e.kickoffTs<now)).length;}
+function setSlipDay(m){__slipDayMode=m;refreshSlipDay();}
+function refreshSlipDay(){
+  try{
+    const t=__slipTarget(),a=document.getElementById("dayToday"),b=document.getElementById("dayTomorrow"),n=document.getElementById("slipDayNote");if(!a||!b||!n)return;
+    const on="background:#0d9488;color:#fff;border-color:#0d9488",off="";
+    a.style.cssText="flex:1;padding:9px;"+(t.mode==="today"?on:off);b.style.cssText="flex:1;padding:9px;"+(t.mode==="tomorrow"?on:off);
+    n.textContent="Slips for matches kicking off "+t.day+" · "+__slipReady(t.day)+" ready ("+__slipReady(t.mode==="today"?t.tm:t.today)+" on the other day)";
+  }catch(e){}
+}
+setInterval(refreshSlipDay,4000);
 const __pscore=p=>parseFloat(p&&(p.score!=null?p.score:p.market_score))||0;
 const __pickIs=(p,line)=>new RegExp("^over "+String(line).replace(".","\\.")+"$","i").test(String((p&&(p.pick||p.market))||"").trim());
 function __goalsLockOf(P){
@@ -358,17 +382,20 @@ const RULES_VER="v1";   // rules frozen 8 Nov 2026 until about 15 Dec 2026; ever
 function __moneyTag(p,e){
   const t=String(p.pick||p.market||"").trim(),sc=__pscore(p),o=parseFloat(p.odds),ed=__edgeNum(p);
   const xg=e.expectedGoals15!=null?e.expectedGoals15:e.expectedGoals;
-  if(/^(home|away) win \(1x2\)/i.test(t)&&sc>=9.9&&ed!=null&&ed>=10)return"A";
-  if(/^over 2\.5$/i.test(t)&&xg!=null&&xg>=3.5&&p.confidence==="High")return"B";
-  if(/^dnb home$/i.test(t)&&xg!=null&&xg>=3&&xg<3.5&&sc>=9.9)return"C";
-  if(/^over 1\.5$/i.test(t)&&o<=1.15&&sc>=9.9&&xg!=null&&xg>=3.5)return"D";
-  return null;
+  let r="";
+  if(/^(home|away) win \(1x2\)/i.test(t)&&sc>=9.9&&ed!=null&&ed>=10)r+="A";
+  if(/^over 2\.5$/i.test(t)&&xg!=null&&xg>=3.5&&p.confidence==="High")r+="B";
+  if(/^dnb home$/i.test(t)&&xg!=null&&xg>=3&&xg<3.5&&sc>=9.9)r+="C";
+  if(/^over 1\.5$/i.test(t)&&o<=1.15&&sc>=9.9&&xg!=null&&xg>=3.5)r+="D";
+  if(/^home win \(1x2\)/i.test(t)&&o>=1.3&&o<1.5&&p.confidence==="High")r+="E";
+  if(/^away win \(1x2\)/i.test(t)&&sc>=9.9)r+="F";
+  return r||null;
 }
 const __isBestBet=p=>__pscore(p)>=9&&(__edgeNum(p)||0)>=15; // a POSITIVE edge of 15 or more (a -15 edge is not a best bet)
 // ── DAILY SLIPS: Safest ticket first, then Over 1.5, Full Time, Over 2.5. Every ticket totals 2.20-2.50 ──
 // No match is shared between the three slips (Over 1.5 has first claim, then Full Time, then Over 2.5). The Safest ticket is built on its own.
 const SLIP_MIN=2.20,SLIP_MAX=2.50,O15_MAX=1.22,O25_MAX=1.55;
-// women's, youth and reserve sides are kept out of Over 1.5 legs
+// women's, youth and reserve sides are now allowed in Over 1.5 legs (user decision 2026-11-10)
 const __WY=/\b(women|womens|ladies|u\s?1[5-9]|u\s?2[0-3]|youth|juniors?|reserves?|ii|iii)\b|\(w\)|\s[wb]$/i;
 const __mk=t=>{t=String(t||"").trim();if(/^over 1\.5$/i.test(t))return"o15";if(/^over 2\.5$/i.test(t))return"o25";if(/^(home|away) win \(1x2\)/i.test(t))return"x12";return null;};
 const __BANDS=[[0,1.15],[1.15,1.22],[1.22,1.35],[1.35,1.55],[1.55,1.9],[1.9,99]];
@@ -396,7 +423,8 @@ function __estProb(T,m,odds,s){
 function __slipCands(minScore){
   const today=__today(),T=__histRates();
   const seen=new Set(),ents=[];
-  for(const e of loadLog()){if(e.date!==today||e.noPick||!e.picks||!e.picks.length)continue;const k=(e.homeTeam||e.match)+"|"+(e.awayTeam||"");if(seen.has(k))continue;seen.add(k);ents.push(e);}
+  const __tgt=__slipTarget().day,__nowMs=Date.now();
+  for(const e of loadLog()){if(__entryDay(e)!==__tgt||e.noPick||!e.picks||!e.picks.length)continue;if(e.kickoffTs&&e.kickoffTs<__nowMs)continue;const k=(e.homeTeam||e.match)+"|"+(e.awayTeam||"");if(seen.has(k))continue;seen.add(k);ents.push(e);}
   const all=[];
   for(const e of ents){
     const P=e.picks,txt=p=>String(p.pick||"").trim();
@@ -410,12 +438,12 @@ function __slipCands(minScore){
       const t=txt(p),m=__mk(t);if(!m)continue;
       const s=__pscore(p),odds=parseFloat(p.odds);
       if(!(odds>1)||s<minScore)continue;
-      if(m==="o15"&&(odds>O15_MAX||wy))continue;
+      if(m==="o15"&&odds>O15_MAX)continue;
       if(m==="o25"&&odds>O25_MAX)continue;
       const ver=s>=9.95&&p.trackRate!=null&&p.trackN!=null&&p.trackRate>=85&&p.trackN>=10;
       const est=__estProb(T,m,odds,s);let pr=est.p;const tags=[];
       tags.push(s>=9.95?"10/10":s+"/10");
-      if(p.money)tags.push("\u{1F4B0} MONEY PICK "+p.money);
+      {const __mt=__moneyTag(p,e);if(__mt)tags.push("\u{1F4B0} MONEY PICK "+__mt);}
       if(ver){pr+=0.02;tags.push("✅ VERIFIED");}
       if(sure){pr+=0.015;tags.push("\u{1F48E} SURE LOCK");}
       if(m!=="x12"&&gl){pr+=0.015;tags.push("\u{1F512} GOALS LOCK");}
@@ -425,7 +453,7 @@ function __slipCands(minScore){
       if(e.aligned)pr+=0.005;
       if(p.trackRate!=null)tags.push(p.trackRate+"% ("+p.trackN+")");
       tags.push("history "+Math.round(est.p*100)+"% (n="+est.n+")");
-      all.push({m:e.match||(e.homeTeam+" vs "+e.awayTeam),mk:(e.homeTeam||"")+"|"+(e.awayTeam||""),pick:t,kind:m,odds,pts:Math.min(0.975,pr),tags,strong:__moneyTag(p,e)==="B"});
+      all.push({d:e.date,m:e.match||(e.homeTeam+" vs "+e.awayTeam),mk:(e.homeTeam||"")+"|"+(e.awayTeam||""),pick:t,kind:m,odds,pts:Math.min(0.975,pr),tags,strong:(__moneyTag(p,e)||"").includes("B"),money:__moneyTag(p,e)||""});
     }
   }
   return{all,n:ents.length};
@@ -457,7 +485,7 @@ function __bestSlip(pool,used,kMin,kMax,anyK){
   return overall;
 }
 // Over 1.5: legs at 1.22 or lower, so usually 4-7 legs. Full Time: 2 legs. Over 2.5: 2 legs, or 3 when no pair fits; never relaxed beyond that.
-const __KIND={safe:{kind:null,min:2,max:7,anyK:true,scores:[9]},o15:{kind:"o15",min:2,max:7,scores:[9,8]},full:{kind:"x12",min:2,max:2,scores:[9]},o25:{kind:"o25",min:2,max:3,anyK:true,scores:[9]}};
+const __KIND={safe:{kind:null,min:2,max:7,anyK:true,scores:[9]},o15:{kind:"o15",min:2,max:7,scores:[9,8]},full:{kind:"x12",min:2,max:2,scores:[9]},o25:{kind:"o25",min:2,max:3,anyK:true,scores:[9]},daily:{kind:null,min:2,max:2,anyK:true,scores:[9]}};
 function __slipFor(kind,used){
   const K=__KIND[kind];
   if(kind==="safe"){ // safest = the best chance of all legs landing, comparing the 9+ and 8+ score levels
@@ -471,6 +499,7 @@ function __slipFor(kind,used){
   for(const minScore of K.scores){
     let pool=__slipCands(minScore).all;
     if(K.kind)pool=pool.filter(c=>c.kind===K.kind);
+    if(kind==="daily")pool=pool.filter(c=>/[ABCEF]/.test(c.money||""));   // Daily ticket: money picks only
     if(kind==="o25")pool=pool.filter(c=>c.strong);   // Over 2.5 legs must be the strongest: xG 3.5+ and High confidence
     const b=__bestSlip(pool,used,K.min,K.max,K.anyK);
     if(b){b.relaxed=minScore<9;return b;}
@@ -482,11 +511,11 @@ function __slipCard(title,b,color,emptyMsg){
   const leg=c=>"<div style='padding:8px 0;border-top:1px solid var(--bd)'><div style='font-weight:700;font-size:13px'>"+c.m+"</div><div style='font-size:13px;margin-top:2px'><b>"+c.pick+"</b> @ <b>"+c.odds.toFixed(2)+"</b></div><div style='font-size:11px;color:var(--dim);margin-top:3px'>"+c.tags.join(" &middot; ")+"</div></div>";
   return "<div style='background:var(--s2);border:2px solid "+(color||"#0d9488")+";border-radius:12px;padding:12px 14px;margin-bottom:10px'><div style='display:flex;justify-content:space-between;align-items:center'><div style='font-weight:800;font-size:13px'>"+title+" ("+b.legs.length+" legs)</div><div style='font-weight:800;font-size:15px;color:"+(color||"#0d9488")+"'>"+b.prod.toFixed(2)+"</div></div><div style='font-size:11px;color:var(--dim);margin-top:2px'>Estimated chance all legs win: "+Math.round(b.pr*100)+"%</div>"+(b.relaxed?"<div style='font-size:11px;color:#b45309;margin-top:3px'>Relaxed: no 9+ combination fit, used 8+ scores.</div>":"")+b.legs.map(leg).join("")+"</div>";
 }
-function __saveSlipRecord(S,A,B,C){
+function __saveSlipRecord(S,A,B,C,D){
   try{
-    const today=__today();
-    const leg=c=>({m:c.m,mk:c.mk,pick:c.pick,odds:c.odds});
-    const rec={date:today,safe:S?S.legs.map(leg):[],o15:A?A.legs.map(leg):[],full:B?B.legs.map(leg):[],over:C?C.legs.map(leg):[],o25:[]};
+    const today=__slipTarget().day;
+    const leg=c=>({m:c.m,mk:c.mk,pick:c.pick,odds:c.odds,d:c.d});
+    const rec={date:today,safe:S?S.legs.map(leg):[],o15:A?A.legs.map(leg):[],full:B?B.legs.map(leg):[],over:C?C.legs.map(leg):[],daily:D?D.legs.map(leg):[],o25:[]};
     const all=JSON.parse(localStorage.getItem("oo_slips")||"[]").filter(r=>r.date!==today);
     all.unshift(rec);localStorage.setItem("oo_slips",JSON.stringify(all.slice(0,400)));
   }catch(e){}
@@ -495,27 +524,30 @@ function buildSlips(){
   const out=document.getElementById("slipOut");
   try{
     const n=__slipCands(8).n;
-    if(!n){out.innerHTML="<div class='box-sub'>No matches analysed today yet. Analyse your matches first, then tap again.</div>";return;}
+    const __tg=__slipTarget();
+    if(!n){out.innerHTML="<div class='box-sub'>No matches kicking off "+__tg.day+" are ready ("+__slipReady(__tg.mode==="today"?__tg.tm:__tg.today)+" on the other day). Analyse your matches, or switch Today / Tomorrow above, then tap again.</div>";return;}
     const used=new Set();
+    const D=__slipFor("daily",new Set());if(D)D.legs.forEach(c=>used.add(c.mk));   // Daily ticket (money picks) claims its two matches first
     const S=__slipFor("safe",used);if(S)S.legs.forEach(c=>used.add(c.mk));   // Safest has first claim; no other slip may share its matches
     const A=__slipFor("o15",used);if(A)A.legs.forEach(c=>used.add(c.mk));
     const B=__slipFor("full",used);if(B)B.legs.forEach(c=>used.add(c.mk));
-    const usedFT=new Set(B?B.legs.map(c=>c.mk):[]);   // Over 2.5 points the same way as Safest and Over 1.5, so it may share their matches; it never shares a Full Time match
+    const usedFT=new Set(B?B.legs.map(c=>c.mk):[]);   // (Daily may share with Over 2.5: same pick)
+       // Over 2.5 points the same way as Safest and Over 1.5, so it may share their matches; it never shares a Full Time match
     const C=__slipFor("o25",usedFT);
-    window.__slips={S,A,B,C};
-    __saveSlipRecord(S,A,B,C);
-    out.innerHTML="<div class='box-sub' style='margin-bottom:8px'>Built from "+n+" matches analysed today: the Safest ticket first (any market, within the odds limits), then Over 1.5, Full Time and Over 2.5. The Safest, Over 1.5 and Full Time tickets never share a match. The Over 2.5 ticket may share matches with Safest and Over 1.5 (same direction), but its legs must be the strongest: xG 3.5+ and High confidence. Over 1.5 legs are 1.22 or lower, Over 2.5 legs 1.55 or lower (2 legs, or 3 when no pair fits), and the Safest and Full Time legs score 9 or more. Odds are ranked with your own graded hit rates. Saved to your Slip tracker in the Log tab.</div>"+__slipCard("Safest ticket &middot; all markets",S,"#7c3aed")+__slipCard("Slip 1 &middot; Over 1.5",A,"#0d9488")+__slipCard("Slip 2 &middot; Full Time (1X2)",B,"#0d9488")+__slipCard("Slip 3 &middot; Over 2.5",C,"#2563eb","No two or three Over 2.5 legs at "+O25_MAX.toFixed(2)+" or lower land between "+SLIP_MIN.toFixed(2)+" and "+SLIP_MAX.toFixed(2)+" today. No Over 2.5 slip.")+"<button class='btn-sm' style='width:100%;padding:10px;margin-bottom:6px' onclick='copySlips()'>&#x1F4CB; Copy all</button><div id='slipCopyMsg' style='font-size:12px;color:var(--dim)'></div>";
+    window.__slips={S,A,B,C,D};
+    __saveSlipRecord(S,A,B,C,D);
+    out.innerHTML="<div class='box-sub' style='margin-bottom:8px'>Built from "+n+" matches kicking off "+__tg.day+": the Daily 2.20 ticket (two money picks) first, then the Safest ticket (any market, within the odds limits), then Over 1.5, Full Time and Over 2.5. The Safest, Over 1.5 and Full Time tickets never share a match. The Over 2.5 ticket may share matches with Safest and Over 1.5 (same direction), but its legs must be the strongest: xG 3.5+ and High confidence. Over 1.5 legs are 1.22 or lower, Over 2.5 legs 1.55 or lower (2 legs, or 3 when no pair fits), and the Safest and Full Time legs score 9 or more. The Daily ticket never shares a match with Safest, Over 1.5 or Full Time. Odds are ranked with your own graded hit rates. Saved to your Slip tracker in the Log tab.</div>"+__slipCard("Safest ticket &middot; all markets",S,"#7c3aed")+__slipCard("Slip 1 &middot; Over 1.5",A,"#0d9488")+__slipCard("Slip 2 &middot; Full Time (1X2)",B,"#0d9488")+__slipCard("Slip 3 &middot; Over 2.5",C,"#2563eb","No two or three Over 2.5 legs at "+O25_MAX.toFixed(2)+" or lower land between "+SLIP_MIN.toFixed(2)+" and "+SLIP_MAX.toFixed(2)+" today. No Over 2.5 slip.")+__slipCard("Daily 2.20 ticket &middot; money picks",D,"#d97706","No two money picks (A, B, C, E, F) land between "+SLIP_MIN.toFixed(2)+" and "+SLIP_MAX.toFixed(2)+" today. No Daily ticket.")+"<button class='btn-sm' style='width:100%;padding:10px;margin-bottom:6px' onclick='copySlips()'>&#x1F4CB; Copy all</button><div id='slipCopyMsg' style='font-size:12px;color:var(--dim)'></div>";
   }catch(e){out.innerHTML="<div class='error-box'>Slip builder failed: "+(e&&e.message||e)+"</div>";}
 }
 // ── SLIP TRACKER: grades saved slips from the log's own results ──
 function __legResult(date,leg){
-  const e=loadLog().find(x=>x.date===date&&((x.homeTeam||"")+"|"+(x.awayTeam||""))===leg.mk);
+  const e=loadLog().find(x=>x.date===(leg.d||date)&&((x.homeTeam||"")+"|"+(x.awayTeam||""))===leg.mk);
   if(!e)return"pending";
   const p=(e.picks||[]).find(q=>String(q.pick||"").trim()===leg.pick&&Math.abs(parseFloat(q.odds)-leg.odds)<0.011);
   return p?p.result:"pending";
 }
 function __legInfo(date,leg){
-  const e=loadLog().find(x=>x.date===date&&((x.homeTeam||"")+"|"+(x.awayTeam||""))===leg.mk);
+  const e=loadLog().find(x=>x.date===(leg.d||date)&&((x.homeTeam||"")+"|"+(x.awayTeam||""))===leg.mk);
   if(!e)return{r:"pending"};
   const ps=e.picks||[];const p=ps.find(q=>String(q.pick||"").trim()===leg.pick&&Math.abs(parseFloat(q.odds)-leg.odds)<0.011);
   const fs=(ps.find(q=>q.finalScore)||{}).finalScore||null;
@@ -536,7 +568,7 @@ function renderSlipTracker(){
   const el=document.getElementById("slipTrack");if(!el)return;
   let recs=[];try{recs=JSON.parse(localStorage.getItem("oo_slips")||"[]");}catch{}
   if(!recs.length){el.innerHTML="";return;}
-  const tot={safe:{w:0,l:0,p:0,net:0},o15:{w:0,l:0,p:0,net:0},full:{w:0,l:0,p:0,net:0},over:{w:0,l:0,p:0,net:0},o25:{w:0,l:0,p:0,net:0}};
+  const tot={safe:{w:0,l:0,p:0,net:0},o15:{w:0,l:0,p:0,net:0},full:{w:0,l:0,p:0,net:0},over:{w:0,l:0,p:0,net:0},daily:{w:0,l:0,p:0,net:0},o25:{w:0,l:0,p:0,net:0}};
   const rows=recs.map(r=>{
     const cell=(k,label)=>{
       if(k==="o25"){
@@ -551,18 +583,18 @@ function renderSlipTracker(){
       if(st==="win")tot[k].net+=1000*(prod-1);if(st==="loss")tot[k].net-=1000;
       return "<div style='font-size:12px'><b>"+label+"</b> "+prod.toFixed(2)+" <span style='color:"+(st==="win"?"#16a34a":st==="loss"?"#dc2626":"#9090a8")+";font-weight:700'>"+(st==="win"?"WIN":st==="loss"?"LOSS":"&#x23F3;")+"</span></div>"+legs.map(l=>__legLine(r.date,l)).join("");
     };
-    return "<div style='padding:7px 0;border-top:1px solid var(--bd)'><div style='font-size:11px;color:var(--dim);margin-bottom:2px'>"+r.date+"</div>"+cell("safe","Safest ticket")+cell("o15","Over 1.5 slip")+cell("full","1X2 slip")+cell("over","Over 2.5 slip")+cell("o25","Over 2.5 best 2 (old)")+"</div>";
+    return "<div style='padding:7px 0;border-top:1px solid var(--bd)'><div style='font-size:11px;color:var(--dim);margin-bottom:2px'>"+r.date+"</div>"+cell("safe","Safest ticket")+cell("o15","Over 1.5 slip")+cell("full","1X2 slip")+cell("over","Over 2.5 slip")+cell("daily","Daily 2.20 ticket")+cell("o25","Over 2.5 best 2 (old)")+"</div>";
   }).join("");
   const line=(name,t)=>{const d=t.w+t.l;return "<div><span style='color:var(--dim)'>"+name+"</span><br><b>"+(d?Math.round(100*t.w/d)+"%":"-")+"</b> <span style='color:var(--dim)'>("+t.w+"W-"+t.l+"L"+(t.p?", "+t.p+" open":"")+")"+(d?" &middot; "+(t.net>=0?"+":"")+Math.round(t.net).toLocaleString()+"</span>":"</span>")+"</div>";};
   const oldN=tot.o25.w+tot.o25.l+tot.o25.p;
   const sumTxt=(n,t)=>{const d=t.w+t.l;return n+" "+(d?Math.round(100*t.w/d)+"%":"-")+" ("+t.w+"W-"+t.l+"L"+(t.p?", "+t.p+" open":"")+")";};
-  const summary=sumTxt("Safest",tot.safe)+" &middot; "+sumTxt("O1.5",tot.o15)+" &middot; "+sumTxt("1X2",tot.full)+" &middot; "+sumTxt("O2.5",tot.over);
+  const summary=sumTxt("Safest",tot.safe)+" &middot; "+sumTxt("O1.5",tot.o15)+" &middot; "+sumTxt("1X2",tot.full)+" &middot; "+sumTxt("O2.5",tot.over)+" &middot; "+sumTxt("Daily",tot.daily);
   el.innerHTML="<div style='background:var(--s2);border:1.5px solid var(--bd);border-radius:12px;margin-bottom:14px;overflow:hidden'><div onclick='toggleSlipTrack()' style='padding:11px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px'><div style='min-width:0'><div style='font-size:12.5px;font-weight:700;color:var(--muted)'>&#x1F4C8; Slip tracker (1,000 flat stake)</div>"+(slipTrackOpen?"":"<div style='font-size:11.5px;color:var(--dim);margin-top:3px'>"+summary+"</div>")+"</div><div style='font-size:11px;color:var(--dim)'>"+(slipTrackOpen?"&#x25B4;":"&#x25BE;")+"</div></div>"+(slipTrackOpen?"<div style='padding:0 14px 11px'><div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-bottom:6px'>"+line("Over 1.5 slip",tot.o15)+line("1X2 slip",tot.full)+line("Over 2.5 slip",tot.over)+(oldN?line("Over 2.5 best 2 (old)",tot.o25):"")+"</div>"+rows+"</div>":"")+"</div>";
 }
 function copySlips(){
   const S=window.__slips||{};
   const fmt=(t,b)=>b?(t+" ("+b.prod.toFixed(2)+")\n"+b.legs.map(c=>"- "+c.m+": "+c.pick+" @ "+c.odds.toFixed(2)).join("\n")):t+": no safe combination today";
-  const txt=fmt("SAFEST TICKET",S.S)+"\n\n"+fmt("SLIP 1 - OVER 1.5",S.A)+"\n\n"+fmt("SLIP 2 - FULL TIME",S.B)+"\n\n"+fmt("SLIP 3 - OVER 2.5",S.C);
+  const txt=fmt("SAFEST TICKET",S.S)+"\n\n"+fmt("SLIP 1 - OVER 1.5",S.A)+"\n\n"+fmt("SLIP 2 - FULL TIME",S.B)+"\n\n"+fmt("SLIP 3 - OVER 2.5",S.C)+"\n\n"+fmt("DAILY 2.20 TICKET",S.D);
   const m=document.getElementById("slipCopyMsg");
   const done=()=>{if(m)m.textContent="Copied.";};
   try{navigator.clipboard.writeText(txt).then(done,()=>{const t=document.createElement("textarea");t.value=txt;document.body.appendChild(t);t.select();try{document.execCommand("copy");}catch{}t.remove();done();});}
@@ -673,7 +705,7 @@ function exportCSV(){
   try{
     const q=v=>{v=v==null?"":String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
     const num=v=>{const n=parseFloat(String(v==null?"":v).replace(/[^0-9.\-]/g,""));return isNaN(n)?null:n;};
-    const head=["date","match","home","away","xG5","xG15","xG_min","correct_score","cs_pct","aligned","pick","odds","score","edge","track_rate","track_n","goals_lock","sure_lock","verified","best_bet","result","final_score"];
+    const head=["date","match","home","away","xG5","xG15","xG_min","L5_home_scored","L5_home_conceded","L5_away_scored","L5_away_conceded","L5_xG","L15_home_scored","L15_home_conceded","L15_away_scored","L15_away_conceded","L15_xG","correct_score","cs_pct","aligned","pick","odds","score","edge","track_rate","track_n","goals_lock","sure_lock","verified","best_bet","result","final_score"];
     const rows=[head.join(",")];let n=0;
     for(const e of loadLog()){
       const P=e.picks||[];const get=re=>P.find(p=>re.test(String(p.pick||"").trim()));
@@ -688,7 +720,7 @@ function exportCSV(){
         const s=parseFloat(p.score)||0,ed=num(p.edge);
         const ver=s>=9.95&&p.trackRate!=null&&p.trackN!=null&&p.trackRate>=85&&p.trackN>=10;
         const bb=__isBestBet(p);
-        rows.push([e.date,e.match,e.homeTeam,e.awayTeam,x5,x15,xm,e.cs,e.csPct,e.aligned?1:0,p.pick,p.odds,p.score,ed==null?"":ed,p.trackRate,p.trackN,gl?1:0,sure?1:0,ver?1:0,bb?1:0,p.result,fsc].map(q).join(","));n++;
+        rows.push([e.date,e.match,e.homeTeam,e.awayTeam,x5,x15,xm,e.w5?e.w5.hs:"",e.w5?e.w5.hc:"",e.w5?e.w5.as:"",e.w5?e.w5.ac:"",e.w5?e.w5.xg:"",e.w15?e.w15.hs:"",e.w15?e.w15.hc:"",e.w15?e.w15.as:"",e.w15?e.w15.ac:"",e.w15?e.w15.xg:"",e.cs,e.csPct,e.aligned?1:0,p.pick,p.odds,p.score,ed==null?"":ed,p.trackRate,p.trackN,gl?1:0,sure?1:0,ver?1:0,bb?1:0,p.result,fsc].map(q).join(","));n++;
       }
     }
     const d=new Date(),pad=x=>String(x).padStart(2,"0");
@@ -828,6 +860,11 @@ function parseOddsBoard(raw){
   const lines=raw.split("\n").map(l=>l.trim()).filter(l=>l.length>0);
   const r={match:null,home_win:null,draw:null,away_win:null,btts_yes:null,btts_no:null,over_15:null,under_15:null,over_25:null,under_25:null,over_35:null,under_35:null,over_45:null,under_45:null,dnb_home:null,dnb_away:null,dc_1x:null,dc_x2:null,dc_12:null,bpw_home_pct:null,bpw_draw_pct:null,bpw_away_pct:null,bpw_btts:null,bpw_over15:null,bpw_over25:null,bpw_goals_avg:null,home_team_goals:{},away_team_goals:{},all_markets:[]};
   for(let i=2;i<lines.length;i++){if(lines[i]==="Football//"){r.homeTeam=lines[i-2];r.awayTeam=lines[i-1];r.match=r.homeTeam+" vs "+r.awayTeam;break;}}
+  // kickoff time, added by the collector as "Kickoff: 4:15 pm Sat 07/11" (optional)
+  for(const L of lines){const km=L.match(/^Kickoff:\s*(\d{1,2}):(\d{2})\s*(am|pm)\s+[A-Za-z]{3}\s+(\d{1,2})\/(\d{1,2})$/i);if(km){
+    const now=new Date();let d=new Date(now.getFullYear(),+km[5]-1,+km[4],(+km[1]%12)+(/pm/i.test(km[3])?12:0),+km[2]);
+    if(d.getTime()<now.getTime()-182*864e5)d.setFullYear(d.getFullYear()+1);else if(d.getTime()>now.getTime()+182*864e5)d.setFullYear(d.getFullYear()-1);
+    r.kickoffTs=d.getTime();r.kickoffDate=d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});break;}}
   for(let i=0;i<lines.length;i++){
     if(lines[i]==="WIN PROBABILITY"&&/^\d+$/.test(lines[i+1]))r.bpw_home_pct=parseInt(lines[i+1]);
     if(lines[i]==="DRAW"&&/^\d+$/.test(lines[i+1]))r.bpw_draw_pct=parseInt(lines[i+1]);
@@ -1399,6 +1436,13 @@ function splitMultiMatchOdds(raw,maxMatches){
   }
   return blocks;
 }
+// Goals scored and conceded per game, read from each window's OWN table (Last 5, Last 15), and the xG each window gives on its own:
+// (home scored + away conceded)/2 + (away scored + home conceded)/2. The old L5/L15 xG numbers both come from the same recent-matches list, so they are always equal.
+function __winGoals(f){
+  if(!f)return null;const hs=f.home_goals_scored,hc=f.home_goals_conceded,as=f.away_goals_scored,ac=f.away_goals_conceded;
+  if([hs,hc,as,ac].some(v=>v==null||isNaN(v)))return null;
+  return{hs:+hs,hc:+hc,as:+as,ac:+ac,xg:+(((+hs)+(+ac))/2+((+as)+(+hc))/2).toFixed(2)};
+}
 function analyzeOne(oddsText,formText,form15Text,cal){
   const odds=parseOddsBoard(oddsText);
   const form5=parseFormData(formText||"");
@@ -1407,7 +1451,7 @@ function analyzeOne(oddsText,formText,form15Text,cal){
   let result;
   try{
     const _r=runRulesEngine(odds,form,formText||"",form15Text||"",cal);
-    result={match:odds.match||"Unknown Match",homeTeam:odds.homeTeam||null,awayTeam:odds.awayTeam||null,expectedGoals:_r.expectedGoals!=null?+_r.expectedGoals.toFixed(2):null,expectedGoals5:_r.expectedGoals5!=null?+_r.expectedGoals5.toFixed(2):null,expectedGoals15:_r.expectedGoals15!=null?+_r.expectedGoals15.toFixed(2):null,picks:_r.picks,_mkt:odds.all_markets.length,no_pick_reason:_r.picks.length===0?"Over 2.5 does not qualify. Skip this match.":""};
+    result={match:odds.match||"Unknown Match",homeTeam:odds.homeTeam||null,awayTeam:odds.awayTeam||null,expectedGoals:_r.expectedGoals!=null?+_r.expectedGoals.toFixed(2):null,expectedGoals5:_r.expectedGoals5!=null?+_r.expectedGoals5.toFixed(2):null,expectedGoals15:_r.expectedGoals15!=null?+_r.expectedGoals15.toFixed(2):null,picks:_r.picks,w5:__winGoals(form5),w15:__winGoals(form15),_mkt:odds.all_markets.length,no_pick_reason:_r.picks.length===0?"Over 2.5 does not qualify. Skip this match.":""};
   }catch(e){
     result={match:odds.match||"Unknown Match",homeTeam:odds.homeTeam||null,awayTeam:odds.awayTeam||null,expectedGoals:null,expectedGoals5:null,expectedGoals15:null,picks:[],no_pick_reason:"Engine error: "+e.message};
   }
@@ -1461,7 +1505,7 @@ async function __fetchOne(h,a,st,label){
       const x=await r.json();
       if(x.ok)return{ok:true,j:x};
       lastErr=x.reason||"unknown";
-      if(/^(match_not_found|ambiguous|missing_names|no_last_matches|page_unreadable|approx_only|no_code)$/.test(lastErr))break;
+      if(/^(match_not_found|ambiguous|missing_names)$/.test(lastErr))break;
     }catch(e){lastErr=e.message;}
     await new Promise(function(res){setTimeout(res,1200);});
   }
@@ -1574,6 +1618,39 @@ async function checkResults(){
   }catch(x){msg.textContent="Check failed: "+x.message;}
   finally{btn.disabled=false;}
 }
+
+// ── BACKGROUND TRACKING (silent; never feeds a rule or a pick) ──
+// Each analysed match also keeps: every full-time odd on the board, the full L5 and L15 stat tables, and the time it was analysed.
+// This lets any market or pocket be tested later from a backup, even if it was never picked.
+function __snapOdds(raw){
+  try{
+    const lines=String(raw||"").split("\n").map(l=>l.trim()).filter(Boolean);
+    const skip=/first half|second half|interval|half time|1up|2up|corner|booking|card|\bminute/i;
+    const secs=[];let cur=null;
+    for(let i=0;i<lines.length;i++){
+      const L=lines[i];
+      if(L.includes("|")){cur={n:L,a:[]};if(!skip.test(L))secs.push(cur);else cur=null;continue;}
+      if(!cur)continue;
+      const nx=lines[i+1]||"";
+      if(/^\d+(\.\d+)?$/.test(nx)&&/^\d{1,3}\.\d{2}$/.test(nx)&&L.length<70&&!/^\d{1,3}\.\d{2}$/.test(L)){cur.a.push(L.replace(/[=;~]/g," ")+"="+nx);i++;}
+    }
+    return secs.filter(x=>x.a.length).map(x=>x.n.replace(/[~¦]/g," ")+"¦"+x.a.join(";")).join("~");
+  }catch(e){return null;}
+}
+function __statStr(text){
+  try{
+    const rows=[],tr=[];
+    for(const line of String(text||"").split("\n").map(l=>l.trim()).filter(Boolean)){
+      if(line.includes("\t")){
+        const p=line.split("\t").map(x=>x.trim());
+        if(p.length>=4&&/\d+:\d+/.test(line))rows.push("table="+p.join(","));
+        else if(p.length>=3)rows.push(p[1].replace(/[=;|~]/g," ")+"="+p[0]+"|"+p[2]);
+      }else if(/(games have|trends|undefeated|haven't lost|have scored|have lost|have won|have over|have under)/i.test(line)&&line.length<140)tr.push(line.replace(/[~¦]/g," "));
+    }
+    return rows.join(";")+(tr.length?"~"+tr.join("¦"):"");
+  }catch(e){return null;}
+}
+
 function runAnalysis(){
   const rawOdds=document.getElementById("oddsInput").value;
   const rawForm=document.getElementById("formInput").value;
@@ -1602,23 +1679,26 @@ function runAnalysis(){
     else if(i===0&&!(key&&fetched.has(key))){f5=formText;f15=form15Text;}
     const o=analyzeOne(b,f5,f15,cal);const r=o.result;
     if(!f5.trim()||!f15.trim()||r.expectedGoals5==null||r.expectedGoals15==null){
-      skipped.push({match:r.match,reason:(!f5.trim()&&!f15.trim())?"no L5 + L15 stats":(!f5.trim()?"no L5 stats":!f15.trim()?"no L15 stats":"L5 / L15 stats could not be read")});
+      skipped.push({block:b,match:r.match,reason:(!f5.trim()&&!f15.trim())?"no L5 + L15 stats":(!f5.trim()?"no L5 stats":!f15.trim()?"no L15 stats":"L5 / L15 stats could not be read")});
       return;
     }
+    try{o.snap=__snapOdds(b);o.st5=__statStr(f5);o.st15=__statStr(f15);}catch(e){}
     outcomes.push(o);
   });
   clearInterval(iv);thinking.style.display="none";
   skipped.forEach(s=>__trashAdd(s.match,s.reason));
+  __skippedBlocks=skipped.map(x=>x.block).filter(Boolean);
   if(!outcomes.length){
     document.getElementById("inputSection").style.display="block";
     document.getElementById("resetBtn").style.display="none";
     document.getElementById("runBtn").disabled=false;
     showError("No match had exact L5 + L15 stats, so nothing was analysed. Skipped: "+skipped.map(s=>s.match+" ("+s.reason+")").join("; ")+".");
+    {const eb=document.getElementById("errorBox");const rb=document.createElement("button");rb.className="btn-sm";rb.style.cssText="width:100%;padding:9px;margin-top:8px";rb.textContent="Retry these "+skipped.length+" now";rb.onclick=retrySkipped;eb.appendChild(rb);}
     renderTrash();return;
   }
   let log=loadLog();
-  for(const{result,odds:__od}of outcomes){
-    const entry={id:Date.now()+Math.floor(Math.random()*1000),date:new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}),match:result.match,homeTeam:result.homeTeam,awayTeam:result.awayTeam,expectedGoals:result.expectedGoals,expectedGoals5:result.expectedGoals5,expectedGoals15:result.expectedGoals15,mode:"engine",muUrl:((__formByMatch[__fk(result.homeTeam,result.awayTeam)]||{}).url)||null,...__csFields(result,__od)};
+  for(const{result,odds:__od,snap:__sn,st5:__s5,st15:__s15}of outcomes){
+    const entry={id:Date.now()+Math.floor(Math.random()*1000),date:new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}),match:result.match,homeTeam:result.homeTeam,awayTeam:result.awayTeam,expectedGoals:result.expectedGoals,expectedGoals5:result.expectedGoals5,expectedGoals15:result.expectedGoals15,mode:"engine",w5:result.w5||null,w15:result.w15||null,kickoffTs:(__od&&__od.kickoffTs)||null,kickoffDate:(__od&&__od.kickoffDate)||null,muUrl:((__formByMatch[__fk(result.homeTeam,result.awayTeam)]||{}).url)||null,analysedAt:Date.now(),snap:__sn||null,st5:__s5||null,st15:__s15||null,...__csFields(result,__od)};
     { // one match = one entry: a re-analysis replaces the older copy, unless that copy already has results
       const __k=__matchKey(entry);const __ix=log.findIndex(x=>__matchKey(x)===__k);
       if(__ix>=0){
@@ -1732,7 +1812,9 @@ function buildMatchHTML(result,odds,form){
   const xgTag=(result.expectedGoals5!=null&&result.expectedGoals15!=null)
     ? " &middot; L5: ~"+result.expectedGoals5+" xG &middot; L15: ~"+result.expectedGoals15+" xG"
     : result.expectedGoals!=null?" &middot; ~"+result.expectedGoals+" xG":"";
-  let html="<div class='result-banner'><div class='result-eye'>&#x26A1; Oracle &mdash; "+(noPick?"no qualifying picks":(result.picks.length+" pick"+(result.picks.length!==1?"s":"")+" found"))+"</div><div class='result-match'>"+result.match+"</div><div class='result-mode'>&#x26A1; Rules Engine &mdash; "+(result._mkt||0)+" markets scanned"+xgTag+"</div></div>"+correctScoreHTML(result,odds);
+  const __w=(x,n)=>x?"<div style='font-size:11.5px;color:var(--dim);margin-top:2px'>L"+n+" goals: home "+x.hs+" scored / "+x.hc+" conceded &middot; away "+x.as+" / "+x.ac+" &rarr; xG "+x.xg+"</div>":"";
+  const __wHTML=__w(result.w5,5)+__w(result.w15,15);
+  let html="<div class='result-banner'><div class='result-eye'>&#x26A1; Oracle &mdash; "+(noPick?"no qualifying picks":(result.picks.length+" pick"+(result.picks.length!==1?"s":"")+" found"))+"</div><div class='result-match'>"+result.match+"</div>"+__wHTML+"<div class='result-mode'>&#x26A1; Rules Engine &mdash; "+(result._mkt||0)+" markets scanned"+xgTag+"</div></div>"+correctScoreHTML(result,odds);
   const goalsLock=!noPick?__goalsLockOf(result.picks):null;
   // SURE LOCK — the rarest, strictest confirmation: 1X2 + Over 1.5 + Over 2.5 ALL
   // present in the same match AND every one of them a genuine 10/10 (not just
@@ -1768,13 +1850,20 @@ function buildMatchHTML(result,odds,form){
   if(odds)html+=dataFoundHTML(odds,form);
   return html;
 }
+let __skippedBlocks=[];
+function retrySkipped(){
+  if(!__skippedBlocks.length||__fetching)return;
+  document.getElementById("oddsInput").value=__skippedBlocks.join("\n\n");
+  fetchMutating(true);
+}
 function renderResult(results,skipped){
+  __skippedBlocks=(skipped||[]).map(x=>x.block).filter(Boolean);
   // Accepts either one {result,odds,form} object (single match) or an array of
   // them (multiple odds boards pasted at once) — rendered stacked, each with its
   // own banner/picks/data-extracted footer, divided for readability.
   const list=Array.isArray(results)?results:[results];
   let html=list.map((r,i)=>buildMatchHTML(r.result,r.odds,r.form)+(i<list.length-1?"<div style='height:10px;border-bottom:1px dashed var(--bd);margin-bottom:18px'></div>":"")).join("");
-  if(skipped&&skipped.length)html="<div style='background:rgba(217,119,6,0.1);border:1.5px solid rgba(217,119,6,0.35);border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;line-height:1.5'><b>Skipped "+skipped.length+" match"+(skipped.length!==1?"es":"")+" (no exact L5 + L15 stats):</b><br>"+skipped.map(s=>s.match+" &mdash; "+s.reason).join("<br>")+"</div>"+html;
+  if(skipped&&skipped.length)html="<div style='background:rgba(217,119,6,0.1);border:1.5px solid rgba(217,119,6,0.35);border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;line-height:1.5'><b>Skipped "+skipped.length+" match"+(skipped.length!==1?"es":"")+" (no exact L5 + L15 stats):</b><br>"+skipped.map(s=>s.match+" &mdash; "+s.reason).join("<br>")+"<button class='btn-sm' style='width:100%;padding:9px;margin-top:8px' onclick='retrySkipped()'>Retry these "+skipped.length+" now</button></div>"+html;
   html+="<div class='footer-note'>OddsOracle scans all goals markets. Score floor 7/10. Min odds 1.10. Singles only. 25+ only.</div>";
   document.getElementById("resultSection").innerHTML=html;
   document.getElementById("resultSection").style.display="block";
@@ -2105,7 +2194,7 @@ function renderLog(){window.__pmFns={};setTimeout(backupReminder,0);setTimeout(r
   // without digging through the full mixed list below.
   // Clean Over 2.5 list: only the positive pocket: xG 3.5 or higher and High confidence (money pick B). Every other Over 2.5 pick stays stored in the log, just not listed here.
   const over25All=log.filter(e=>(e.picks||[]).some(p=>getMarketType(p.pick)==="Over 2.5"));
-  const over25Log=over25All.filter(e=>{const p=e.picks.find(q=>getMarketType(q.pick)==="Over 2.5");return p&&__moneyTag(p,e)==="B";});
+  const over25Log=over25All.filter(e=>{const p=e.picks.find(q=>getMarketType(q.pick)==="Over 2.5");return p&&(__moneyTag(p,e)||"").includes("B");});
   if(over25Log.length>0){
     // Flat-stake profit tracker — every Over 2.5 pick treated as its own single
     // bet (not combined into an accumulator) at a fixed stake, so it's a direct
@@ -2144,7 +2233,7 @@ function renderLog(){window.__pmFns={};setTimeout(backupReminder,0);setTimeout(r
         const resTag=o25.result==="pending"?"<span style=\"color:var(--dim)\">&#x23F3;</span>":"<span style=\"color:"+resColor+";font-weight:700\">"+resLabel(o25.result)+"</span>";
         return "<div style=\"display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid var(--s3)\">"+
           "<div style=\"min-width:0\"><div style=\"font-size:12.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap\">"+homeT+" <span style=\"color:var(--dim);font-weight:500\">vs</span> "+awayT+"</div>"+
-          "<div style=\"font-size:11px;color:var(--dim);margin-top:1px;font-family:Courier New,monospace\">@ "+o25.odds+" &middot; "+o25.score+"/10 &middot; "+resTag+"</div></div>"+
+          "<div style=\"font-size:11px;color:var(--dim);margin-top:1px;font-family:Courier New,monospace\">@ "+o25.odds+" &middot; "+o25.score+"/10 &middot; "+resTag+(o25.result==="win"?" <b style=\"color:#16a34a\">+"+fmt(STAKE*((parseFloat(o25.odds)||1)-1))+"</b>":o25.result==="loss"?" <b style=\"color:#dc2626\">-"+fmt(STAKE)+"</b>":"")+"</div></div>"+
           "<button class=\"del-btn\" onclick=\"delEntry("+entry.id+")\" >&#x1F5D1;</button></div>";
       }).join("")+"</div>";
     }
@@ -2162,6 +2251,8 @@ function renderLog(){window.__pmFns={};setTimeout(backupReminder,0);setTimeout(r
         : entry.expectedGoals!=null?entry.expectedGoals+" xG":null;
       const __act=(picks.find(p=>p.finalScore)||{}).finalScore;
       const csTag=entry.cs?"<span style=\"font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:rgba(37,99,235,0.08);color:#2563eb;border:1px solid rgba(37,99,235,0.25);margin-left:6px;white-space:nowrap;display:inline-block;margin-top:3px\">&#x1F3AF; "+entry.cs+" ("+entry.csPct+"%)"+(__act?" &middot; actual "+__act:"")+"</span>"+(entry.aligned?"<span style=\"font-size:10px;font-weight:800;padding:2px 7px;border-radius:999px;background:#16a34a;color:#fff;margin-left:6px;white-space:nowrap;display:inline-block;margin-top:3px\">&#x2705; ALIGNED</span>":""):"";
+      const __wl=(x,n)=>x?"<div style=\"font-size:10.5px;color:var(--dim);margin-top:2px;font-weight:500\">L"+n+": home "+x.hs+"/"+x.hc+" &middot; away "+x.as+"/"+x.ac+" (scored/conceded) &rarr; xG "+x.xg+"</div>":"";
+      const wTag=(entry.w5||entry.w15)?__wl(entry.w5,5)+__wl(entry.w15,15):"";
       const goalsTag=goalsTagText?"<span style=\"font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:rgba(217,119,6,0.1);color:var(--amber);border:1px solid rgba(217,119,6,0.25);margin-left:6px\">&#x26BD; "+goalsTagText+"</span>":"";
       // GOALS LOCK — same rule as the Analyse tab: Over 1.5 (score>=9) AND Over 2.5
       // (score>=8) both present in the SAME match. Tags only those two picks, not
@@ -2181,7 +2272,7 @@ function renderLog(){window.__pmFns={};setTimeout(backupReminder,0);setTimeout(r
       const VERIFIED_RATE_MIN=85,VERIFIED_N_MIN=10;
       const isVerifiedPick=p=>(parseFloat(p.score)||0)>=9.95&&p.trackRate!=null&&p.trackN!=null&&p.trackRate>=VERIFIED_RATE_MIN&&p.trackN>=VERIFIED_N_MIN;
       return "<div class=\"log-entry\">"+
-        "<div class=\"log-head\"><div><div style=\"font-size:11px;color:#9090a8;margin-bottom:2px\">"+entry.date+" "+modeTagHTML()+goalsTag+csTag+"</div>"+
+        "<div class=\"log-head\"><div><div style=\"font-size:11px;color:#9090a8;margin-bottom:2px\">"+entry.date+" "+modeTagHTML()+goalsTag+csTag+wTag+"</div>"+
         "<div style=\"font-size:13px;font-weight:700;color:var(--ink);margin-bottom:2px\"><span>"+homeT+"</span><span style=\"color:var(--dim);font-weight:500\"> vs </span><span>"+awayT+"</span></div>"+
         "<div style=\"font-size:12px;font-weight:600;color:var(--muted)\">"+picks.length+" pick"+(picks.length!==1?"s":"")+"</div></div><div style=\"display:flex;align-items:center;gap:2px\"><button class=\"del-btn\" style=\""+(entry.favorite?"color:#d4a017":"")+"\" onclick=\"toggleFavorite("+entry.id+")\" >"+(entry.favorite?"&#x2605;":"&#x2606;")+"</button><button class=\"del-btn\" onclick=\"delEntry("+entry.id+")\" >&#x1F5D1;</button></div></div>"+
         "<div class=\"log-picks\">"+picks.map((p,pi)=>{
