@@ -144,7 +144,7 @@ textarea:focus{outline:none;border-color:var(--silver3);}
 <div id="analyseTab" class="zone">
 <div id="slipWrap" style="margin-bottom:12px">
     <div style="display:flex;gap:8px;margin-bottom:6px"><button class="btn-sm" id="dayToday" type="button" onclick="setSlipDay('today')">Today</button><button class="btn-sm" id="dayTomorrow" type="button" onclick="setSlipDay('tomorrow')">Tomorrow</button></div><div id="slipDayNote" style="font-size:11.5px;color:var(--dim);margin-bottom:8px"></div>
-    <button class="run-btn" type="button" onclick="buildSlips()" style="background:linear-gradient(135deg,#0d9488,#7c3aed);margin-bottom:8px">&#x1F3AF; Build slips (Safest, Over 1.5, Full Time, Over 2.5, Daily &middot; 2.20&ndash;2.50)</button>
+    <button class="run-btn" type="button" onclick="buildSlips()" style="background:linear-gradient(135deg,#0d9488,#7c3aed);margin-bottom:8px">&#x1F3AF; Build slips (Full Time, Over 1.5, My bets, Safest &middot; 2.20&ndash;2.50)</button>
     <div id="slipOut"></div>
   </div>
   <div id="inputSection">
@@ -459,10 +459,14 @@ function __slipCands(minScore){
   return{all,n:ents.length};
 }
 // Safest = the combination with the highest chance of every leg landing, among all that total 2.20-2.50.
-function __bestSlip(pool,used,kMin,kMax,anyK){
+function __bestSlip(pool,used,kMin,kMax,anyK,mix){
   const byM={};
   for(const c of pool){if(used.has(c.mk))continue;if(!byM[c.mk]||c.pts>byM[c.mk].pts)byM[c.mk]=c;}
-  const L=Object.values(byM).sort((x,y)=>y.pts-x.pts).slice(0,18);
+  let L=Object.values(byM).sort((x,y)=>y.pts-x.pts).slice(0,18);
+  if(mix){   // the mixed-market Safest needs legs of every market in the search, not only the top 18 overall (which can all be Over 1.5)
+    const per={};Object.values(byM).sort((x,y)=>y.pts-x.pts).forEach(c=>{(per[c.kind]=per[c.kind]||[]).push(c);});
+    L=[].concat(...Object.values(per).map(a=>a.slice(0,9))).sort((x,y)=>y.pts-x.pts);
+  }
   let overall=null;
   for(let k=kMin;k<=kMax;k++){
     let best=null;
@@ -470,6 +474,7 @@ function __bestSlip(pool,used,kMin,kMax,anyK){
       if(cnt===k){
         const p=Math.round(prod*100)/100;
         if(p<SLIP_MIN||p>SLIP_MAX)return;
+        if(mix&&new Set(chosen.map(c=>c.kind)).size<2)return;   // (mix rule kept in code but switched off for Safest on 2026-11-11)
         if(!best||pr>best.pr+1e-12||(Math.abs(pr-best.pr)<1e-12&&p<best.prod))best={legs:chosen.slice(),prod:p,pr};
         return;
       }
@@ -491,7 +496,7 @@ function __slipFor(kind,used){
   if(kind==="safe"){ // safest = the best chance of all legs landing, comparing the 9+ and 8+ score levels
     let best=null;
     for(const minScore of K.scores){
-      const b=__bestSlip(__slipCands(minScore).all,used,K.min,K.max,true);
+      const b=__bestSlip(__slipCands(minScore).all,used,K.min,K.max,true,false);   // free choice: any qualifying market, no mix required (2026-11-11)
       if(b&&(!best||b.pr>best.pr+1e-12)){best=b;best.relaxed=minScore<9;}
     }
     return best;
@@ -527,16 +532,14 @@ function buildSlips(){
     const __tg=__slipTarget();
     if(!n){out.innerHTML="<div class='box-sub'>No matches kicking off "+__tg.day+" are ready ("+__slipReady(__tg.mode==="today"?__tg.tm:__tg.today)+" on the other day). Analyse your matches, or switch Today / Tomorrow above, then tap again.</div>";return;}
     const used=new Set();
-    const D=__slipFor("daily",new Set());if(D)D.legs.forEach(c=>used.add(c.mk));   // Daily ticket (money picks) claims its two matches first
-    const S=__slipFor("safe",used);if(S)S.legs.forEach(c=>used.add(c.mk));   // Safest has first claim; no other slip may share its matches
+    const B=__slipFor("full",used);if(B)B.legs.forEach(c=>used.add(c.mk));   // order since 2026-11-11: Full Time, Over 1.5, My bets, Safest last
     const A=__slipFor("o15",used);if(A)A.legs.forEach(c=>used.add(c.mk));
-    const B=__slipFor("full",used);if(B)B.legs.forEach(c=>used.add(c.mk));
-    const usedFT=new Set(B?B.legs.map(c=>c.mk):[]);   // (Daily may share with Over 2.5: same pick)
-       // Over 2.5 points the same way as Safest and Over 1.5, so it may share their matches; it never shares a Full Time match
-    const C=__slipFor("o25",usedFT);
+    const S=__slipFor("safe",used);   // Safest is built last: it takes the best of what the other tickets leave
+    const D=__slipFor("daily",new Set());   // My bets: best money picks, may share matches with the other tickets, claims nothing, not shown here, tracked in the Slip tracker only (2026-11-11)
+    const C=null;   // Over 2.5 slip dropped (2026-11-11)
     window.__slips={S,A,B,C,D};
     __saveSlipRecord(S,A,B,C,D);
-    out.innerHTML="<div class='box-sub' style='margin-bottom:8px'>Built from "+n+" matches kicking off "+__tg.day+": the Daily 2.20 ticket (two money picks) first, then the Safest ticket (any market, within the odds limits), then Over 1.5, Full Time and Over 2.5. The Safest, Over 1.5 and Full Time tickets never share a match. The Over 2.5 ticket may share matches with Safest and Over 1.5 (same direction), but its legs must be the strongest: xG 3.5+ and High confidence. Over 1.5 legs are 1.22 or lower, Over 2.5 legs 1.55 or lower (2 legs, or 3 when no pair fits), and the Safest and Full Time legs score 9 or more. The Daily ticket never shares a match with Safest, Over 1.5 or Full Time. Odds are ranked with your own graded hit rates. Saved to your Slip tracker in the Log tab.</div>"+__slipCard("Safest ticket &middot; all markets",S,"#7c3aed")+__slipCard("Slip 1 &middot; Over 1.5",A,"#0d9488")+__slipCard("Slip 2 &middot; Full Time (1X2)",B,"#0d9488")+__slipCard("Slip 3 &middot; Over 2.5",C,"#2563eb","No two or three Over 2.5 legs at "+O25_MAX.toFixed(2)+" or lower land between "+SLIP_MIN.toFixed(2)+" and "+SLIP_MAX.toFixed(2)+" today. No Over 2.5 slip.")+__slipCard("Daily 2.20 ticket &middot; money picks",D,"#d97706","No two money picks (A, B, C, E, F) land between "+SLIP_MIN.toFixed(2)+" and "+SLIP_MAX.toFixed(2)+" today. No Daily ticket.")+"<button class='btn-sm' style='width:100%;padding:10px;margin-bottom:6px' onclick='copySlips()'>&#x1F4CB; Copy all</button><div id='slipCopyMsg' style='font-size:12px;color:var(--dim)'></div>";
+    out.innerHTML="<div class='box-sub' style='margin-bottom:8px'>Built from "+n+" matches kicking off "+__tg.day+": Full Time first, then Over 1.5, and last the Safest ticket (any qualifying market, free choice, from what is left). The My bets ticket (best money picks) is saved to your Slip tracker in the Log tab and is not shown here; it may share matches with these tickets. No match is shared between tickets. Over 1.5 legs are 1.22 or lower, and the Safest and Full Time legs score 9 or more. Odds are ranked with your own graded hit rates. Saved to your Slip tracker in the Log tab.</div>"+__slipCard("Slip 1 &middot; Full Time (1X2)",B,"#0d9488")+__slipCard("Slip 2 &middot; Over 1.5",A,"#0d9488")+__slipCard("Safest ticket &middot; all markets (last)",S,"#7c3aed")+"<button class='btn-sm' style='width:100%;padding:10px;margin-bottom:6px' onclick='copySlips()'>&#x1F4CB; Copy all</button><div id='slipCopyMsg' style='font-size:12px;color:var(--dim)'></div>";
   }catch(e){out.innerHTML="<div class='error-box'>Slip builder failed: "+(e&&e.message||e)+"</div>";}
 }
 // ── SLIP TRACKER: grades saved slips from the log's own results ──
@@ -583,18 +586,18 @@ function renderSlipTracker(){
       if(st==="win")tot[k].net+=1000*(prod-1);if(st==="loss")tot[k].net-=1000;
       return "<div style='font-size:12px'><b>"+label+"</b> "+prod.toFixed(2)+" <span style='color:"+(st==="win"?"#16a34a":st==="loss"?"#dc2626":"#9090a8")+";font-weight:700'>"+(st==="win"?"WIN":st==="loss"?"LOSS":"&#x23F3;")+"</span></div>"+legs.map(l=>__legLine(r.date,l)).join("");
     };
-    return "<div style='padding:7px 0;border-top:1px solid var(--bd)'><div style='font-size:11px;color:var(--dim);margin-bottom:2px'>"+r.date+"</div>"+cell("safe","Safest ticket")+cell("o15","Over 1.5 slip")+cell("full","1X2 slip")+cell("over","Over 2.5 slip")+cell("daily","Daily 2.20 ticket")+cell("o25","Over 2.5 best 2 (old)")+"</div>";
+    return "<div style='padding:7px 0;border-top:1px solid var(--bd)'><div style='font-size:11px;color:var(--dim);margin-bottom:2px'>"+r.date+"</div>"+cell("safe","Safest ticket")+cell("o15","Over 1.5 slip")+cell("full","1X2 slip")+cell("over","Over 2.5 slip")+cell("daily","My bets ticket")+cell("o25","Over 2.5 best 2 (old)")+"</div>";
   }).join("");
   const line=(name,t)=>{const d=t.w+t.l;return "<div><span style='color:var(--dim)'>"+name+"</span><br><b>"+(d?Math.round(100*t.w/d)+"%":"-")+"</b> <span style='color:var(--dim)'>("+t.w+"W-"+t.l+"L"+(t.p?", "+t.p+" open":"")+")"+(d?" &middot; "+(t.net>=0?"+":"")+Math.round(t.net).toLocaleString()+"</span>":"</span>")+"</div>";};
   const oldN=tot.o25.w+tot.o25.l+tot.o25.p;
   const sumTxt=(n,t)=>{const d=t.w+t.l;return n+" "+(d?Math.round(100*t.w/d)+"%":"-")+" ("+t.w+"W-"+t.l+"L"+(t.p?", "+t.p+" open":"")+")";};
-  const summary=sumTxt("Safest",tot.safe)+" &middot; "+sumTxt("O1.5",tot.o15)+" &middot; "+sumTxt("1X2",tot.full)+" &middot; "+sumTxt("O2.5",tot.over)+" &middot; "+sumTxt("Daily",tot.daily);
+  const summary=sumTxt("Safest",tot.safe)+" &middot; "+sumTxt("O1.5",tot.o15)+" &middot; "+sumTxt("1X2",tot.full)+" &middot; "+sumTxt("O2.5",tot.over)+" &middot; "+sumTxt("My bets",tot.daily);
   el.innerHTML="<div style='background:var(--s2);border:1.5px solid var(--bd);border-radius:12px;margin-bottom:14px;overflow:hidden'><div onclick='toggleSlipTrack()' style='padding:11px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px'><div style='min-width:0'><div style='font-size:12.5px;font-weight:700;color:var(--muted)'>&#x1F4C8; Slip tracker (1,000 flat stake)</div>"+(slipTrackOpen?"":"<div style='font-size:11.5px;color:var(--dim);margin-top:3px'>"+summary+"</div>")+"</div><div style='font-size:11px;color:var(--dim)'>"+(slipTrackOpen?"&#x25B4;":"&#x25BE;")+"</div></div>"+(slipTrackOpen?"<div style='padding:0 14px 11px'><div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-bottom:6px'>"+line("Over 1.5 slip",tot.o15)+line("1X2 slip",tot.full)+line("Over 2.5 slip",tot.over)+(oldN?line("Over 2.5 best 2 (old)",tot.o25):"")+"</div>"+rows+"</div>":"")+"</div>";
 }
 function copySlips(){
   const S=window.__slips||{};
   const fmt=(t,b)=>b?(t+" ("+b.prod.toFixed(2)+")\n"+b.legs.map(c=>"- "+c.m+": "+c.pick+" @ "+c.odds.toFixed(2)).join("\n")):t+": no safe combination today";
-  const txt=fmt("SAFEST TICKET",S.S)+"\n\n"+fmt("SLIP 1 - OVER 1.5",S.A)+"\n\n"+fmt("SLIP 2 - FULL TIME",S.B)+"\n\n"+fmt("SLIP 3 - OVER 2.5",S.C)+"\n\n"+fmt("DAILY 2.20 TICKET",S.D);
+  const txt=fmt("SLIP 1 - FULL TIME",S.B)+"\n\n"+fmt("SLIP 2 - OVER 1.5",S.A)+"\n\n"+fmt("SAFEST TICKET",S.S);
   const m=document.getElementById("slipCopyMsg");
   const done=()=>{if(m)m.textContent="Copied.";};
   try{navigator.clipboard.writeText(txt).then(done,()=>{const t=document.createElement("textarea");t.value=txt;document.body.appendChild(t);t.select();try{document.execCommand("copy");}catch{}t.remove();done();});}
