@@ -351,13 +351,27 @@ function renderTrash(){
 const __today=()=>new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
 // Slips are built for the day the matches KICK OFF (saved from betPawa); entries with no kickoff use the day they were analysed.
 let __slipDayMode=null;
-const __entryDay=e=>e.kickoffDate||e.date;
+let __slipNoDate=false;   // false: a match with no kickoff date is NOT assumed to be today's
+const __entryDay=e=>e.kickoffDate||(__slipNoDate?e.date:"~no-kickoff-date");
+function __undatedCount(){const t=new Date(),y=new Date(t.getTime()-864e5),f=d=>d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}),ok=new Set([f(t),f(y)]);return loadLog().filter(e=>!e.noPick&&e.picks&&e.picks.length&&!e.kickoffDate&&ok.has(e.date)).length;}
+function setNoDate(v){__slipNoDate=!!v;refreshSlipDay();}
 function __slipTarget(){
   const now=new Date(),today=__today(),tm=new Date(now.getTime()+864e5).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
   let mode=__slipDayMode;
-  if(!mode){const hasTm=loadLog().some(e=>!e.noPick&&e.picks&&e.picks.length&&e.kickoffDate===tm&&(!e.kickoffTs||e.kickoffTs>now.getTime()));mode=(now.getHours()>=17&&hasTm)?"tomorrow":"today";}
-  return{mode,day:mode==="tomorrow"?tm:today,today,tm};
+  const fmt=d=>d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
+  const later=fmt(new Date(now.getTime()+2*864e5));
+  let day=null;
+  if(!mode){
+    // AUTOMATIC: the first day (today, tomorrow, the day after) that has enough matches still to be played, by the real kickoff date. No button needed.
+    const MIN=6,days=[today,tm,later];
+    day=days.find(d=>__slipReady(d)>=MIN)||days.slice().sort((x,y)=>__slipReady(y)-__slipReady(x))[0]||today;
+    if(__slipReady(day)===0)day=today;
+    mode=day===today?"today":day===tm?"tomorrow":"later";
+  }
+  else day=mode==="tomorrow"?tm:today;
+  return{mode,day,today,tm,auto:!__slipDayMode};
 }
+function __dayTitle(d){try{const x=new Date(d);return isNaN(x)?d:x.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});}catch(e){return d;}}
 function __slipReady(day){const now=Date.now();return loadLog().filter(e=>!e.noPick&&e.picks&&e.picks.length&&__entryDay(e)===day&&!(e.kickoffTs&&e.kickoffTs<now)).length;}
 function setSlipDay(m){__slipDayMode=m;refreshSlipDay();}
 function refreshSlipDay(){
@@ -365,7 +379,10 @@ function refreshSlipDay(){
     const t=__slipTarget(),a=document.getElementById("dayToday"),b=document.getElementById("dayTomorrow"),n=document.getElementById("slipDayNote");if(!a||!b||!n)return;
     const on="background:#0d9488;color:#fff;border-color:#0d9488",off="";
     a.style.cssText="flex:1;padding:9px;"+(t.mode==="today"?on:off);b.style.cssText="flex:1;padding:9px;"+(t.mode==="tomorrow"?on:off);
-    n.textContent="Slips for matches kicking off "+t.day+" · "+__slipReady(t.day)+" ready ("+__slipReady(t.mode==="today"?t.tm:t.today)+" on the other day)";
+    n.textContent="Slips for matches kicking off "+t.day+" · "+__slipReady(t.day)+" ready ("+__slipReady(t.mode==="today"?t.tm:t.today)+" on the other day)"+(t.auto?" · automatic":"");
+    const u=__undatedCount();
+    if(u>0&&!__slipNoDate){n.appendChild(document.createElement("br"));const s2=document.createElement("span");s2.style.cssText="color:#b45309;font-weight:700";s2.textContent=u+" recent match(es) have no kickoff date and are left out. ";const l=document.createElement("a");l.href="#";l.textContent="Include them as analysed-today";l.style.cssText="color:#0d9488;font-weight:700";l.onclick=function(ev){ev.preventDefault();setNoDate(true);};n.appendChild(s2);n.appendChild(l);}
+    else if(__slipNoDate){n.appendChild(document.createElement("br"));const l=document.createElement("a");l.href="#";l.textContent="Undated matches are included (tap to leave them out)";l.style.cssText="color:#b45309;font-weight:700";l.onclick=function(ev){ev.preventDefault();setNoDate(false);};n.appendChild(l);}
   }catch(e){}
 }
 setInterval(refreshSlipDay,4000);
@@ -539,7 +556,7 @@ function buildSlips(){
     const C=null;   // Over 2.5 slip dropped (2026-11-11)
     window.__slips={S,A,B,C,D};
     __saveSlipRecord(S,A,B,C,D);
-    out.innerHTML="<div class='box-sub' style='margin-bottom:8px'>Built from "+n+" matches kicking off "+__tg.day+": Full Time first, then Over 1.5, and last the Safest ticket (any qualifying market, free choice, from what is left). The My bets ticket (best money picks) is saved to your Slip tracker in the Log tab and is not shown here; it may share matches with these tickets. No match is shared between tickets. Over 1.5 legs are 1.22 or lower, and the Safest and Full Time legs score 9 or more. Odds are ranked with your own graded hit rates. Saved to your Slip tracker in the Log tab.</div>"+__slipCard("Slip 1 &middot; Full Time (1X2)",B,"#0d9488")+__slipCard("Slip 2 &middot; Over 1.5",A,"#0d9488")+__slipCard("Safest ticket &middot; all markets (last)",S,"#7c3aed")+"<button class='btn-sm' style='width:100%;padding:10px;margin-bottom:6px' onclick='copySlips()'>&#x1F4CB; Copy all</button><div id='slipCopyMsg' style='font-size:12px;color:var(--dim)'></div>";
+    out.innerHTML="<div style='font-weight:800;font-size:15px;margin-bottom:4px'>"+__dayTitle(__tg.day)+"</div><div class='box-sub' style='margin-bottom:8px'>Built from "+n+" matches kicking off "+__tg.day+": Full Time first, then Over 1.5, and last the Safest ticket (any qualifying market, free choice, from what is left). The My bets ticket (best money picks) is saved to your Slip tracker in the Log tab and is not shown here; it may share matches with these tickets. No match is shared between tickets. Over 1.5 legs are 1.22 or lower, and the Safest and Full Time legs score 9 or more. Odds are ranked with your own graded hit rates. Saved to your Slip tracker in the Log tab.</div>"+__slipCard("Slip 1 &middot; Full Time (1X2)",B,"#0d9488")+__slipCard("Slip 2 &middot; Over 1.5",A,"#0d9488")+__slipCard("Safest ticket &middot; all markets (last)",S,"#7c3aed")+"<button class='btn-sm' style='width:100%;padding:10px;margin-bottom:6px' onclick='copySlips()'>&#x1F4CB; Copy all</button><div id='slipCopyMsg' style='font-size:12px;color:var(--dim)'></div>";
   }catch(e){out.innerHTML="<div class='error-box'>Slip builder failed: "+(e&&e.message||e)+"</div>";}
 }
 // ── SLIP TRACKER: grades saved slips from the log's own results ──
@@ -1523,17 +1540,35 @@ async function fetchMutating(auto){
     const teams=__teamsOf(raw);
     if(!teams.length){st.textContent="Couldn't read team names from the odds board.";return;}
     __fetching=true; fb.disabled=true; __formByMatch={};
-    let okN=0, fails=[];
+    let okN=0, failed=[];
+    const __try=async function(t,i,label){
+      const res=await __fetchOne(t.home,t.away,st,label);
+      if(!res.ok)return{ok:false,why:__reasonText(res.err),err:res.err};
+      const j=res.j;
+      if(j.approx)return{ok:false,why:"no exact L5 + L15 stats (approximate only)",err:"approx"};
+      __formByMatch[__fk(t.home,t.away)]={l5:j.text5,l15:j.text15,url:j.matchUrl||null};
+      if(okN===0&&Object.keys(__formByMatch).length===1)document.getElementById("formInput").value=j.text5+"\n\n"+j.text15;
+      return{ok:true};
+    };
     for(let i=0;i<teams.length;i++){
       const t=teams[i];
-      const res=await __fetchOne(t.home,t.away,st,"Match "+(i+1)+" of "+teams.length+": fetching");
-      if(!res.ok){const why=__reasonText(res.err);fails.push(t.home+" v "+t.away+" ("+why+")");__trashAdd(t.home+" vs "+t.away,why);continue;}
-      const j=res.j;
-      if(j.approx){const why="no exact L5 + L15 stats (approximate only)";fails.push(t.home+" v "+t.away+" ("+why+")");__trashAdd(t.home+" vs "+t.away,why);continue;}
-      __formByMatch[__fk(t.home,t.away)]={l5:j.text5,l15:j.text15,url:j.matchUrl||null};
-      if(i===0)document.getElementById("formInput").value=j.text5+"\n\n"+j.text15;
-      okN++;
+      const r=await __try(t,i,"Match "+(i+1)+" of "+teams.length+": fetching");
+      if(r.ok)okN++;else failed.push({t,why:r.why,err:r.err,i});
     }
+    // AUTOMATIC RETRY: matches that came back with no L5 / L15 are tried again in up to 3 more rounds (with a pause), so a busy moment on the stats server does not lose them.
+    for(let round=1;round<=3&&failed.length;round++){
+      const retryable=failed.filter(f=>f.err!=="missing_names");
+      if(!retryable.length)break;
+      for(let w=4;w>0;w--){st.textContent="Retrying "+retryable.length+" skipped match(es) in "+w+"s (round "+round+" of 3)...";await new Promise(function(res){setTimeout(res,1000);});}
+      const still=failed.filter(f=>f.err==="missing_names");
+      for(let k=0;k<retryable.length;k++){
+        const f=retryable[k];
+        const r=await __try(f.t,f.i,"Retry "+round+"/3, match "+(k+1)+" of "+retryable.length+": fetching");
+        if(r.ok)okN++;else{f.why=r.why;f.err=r.err;still.push(f);}
+      }
+      failed=still;
+    }
+    const fails=failed.map(function(f){__trashAdd(f.t.home+" vs "+f.t.away,f.why);return f.t.home+" v "+f.t.away+" ("+f.why+")";});
     __lastFetchKey=teams.map(function(t){return __fk(t.home,t.away);}).join("#");
     let msg="Exact L5 + L15 stats loaded for "+okN+" of "+teams.length+" match(es).";
     if(fails.length)msg+=" Skipped (see Skipped matches in the Log): "+fails.join("; ")+".";
